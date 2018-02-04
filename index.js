@@ -1,6 +1,7 @@
 const unifi = require("node-unifi");
 const Bluebird = require("bluebird");
 const R = require("ramda");
+const retry = require("bluebird-retry");
 
 let Accessory, Service, Characteristic, UUIDGen;
 
@@ -34,6 +35,7 @@ function UnifyGuestWifiPlatform(log, config, api) {
   this.log = log;
   this.config = config;
   this.accessories = {};
+  this.ready = false;
 
   this.controllerConfig = config.controller;
 
@@ -52,34 +54,46 @@ function UnifyGuestWifiPlatform(log, config, api) {
     // Platform Plugin should only register new accessory that doesn't exist in homebridge after this event.
     // Or start discover new accessories.
     this.api.on("didFinishLaunching", () => {
-      this.log(
-        "Logging into Unifi Controller",
-        this.controllerConfig.address,
-        this.controllerConfig.port
-      );
-      this.unifiController
-        .loginAsync(
-          this.controllerConfig.username,
-          this.controllerConfig.password
-        )
-        .then(() => {
-          this.log("Logged into Unifi Controller");
-          return this.loadGuestWifi().then(() => {
-            const interval = this.controllerConfig.updateInterval || 10000;
+      retry(
+        () => {
+          this.log(
+            "Logging into Unifi Controller",
+            this.controllerConfig.address,
+            this.controllerConfig.port
+          );
+          return this.unifiController
+            .loginAsync(
+              this.controllerConfig.username,
+              this.controllerConfig.password
+            )
+            .then(() => {
+              this.log("Logged into Unifi Controller");
+              return this.loadGuestWifi().then(() => {
+                const interval = this.controllerConfig.updateInterval || 10000;
 
-            this.log(`Setting up update interval: ${interval}`);
+                this.log(`Setting up update interval: ${interval}`);
 
-            this.updateInterval = setInterval(() => {
-              this.log("Updating Guest Wifi Controller");
-              this.loadGuestWifi();
-            }, interval);
+                this.updateInterval = setInterval(() => {
+                  this.log("Updating Guest Wifi Controller");
+                  this.loadGuestWifi();
+                }, interval);
 
-            platform.log("DidFinishLaunching");
-          });
-        })
-        .catch(e => {
-          this.log("error loading guest wifies", e);
-        });
+                platform.log("DidFinishLaunching");
+              });
+            })
+            .catch(e => {
+              this.log("error loading guest wifies", e);
+              throw e;
+            });
+        },
+        {
+          interval: 6000,
+          max_tries: 10,
+          throw_original: true
+        }
+      ).then(() => {
+        this.ready = true;
+      });
     });
   }
 }
@@ -164,6 +178,10 @@ UnifyGuestWifiPlatform.prototype.setupAccessory = function(
     .getService(Service.Switch)
     .getCharacteristic(Characteristic.On)
     .on("set", async (value, callback) => {
+      if (!this.ready) {
+        callback(new Error("unifi controller is not ready yet."));
+      }
+
       const { site, wlan } = accessory.context;
       this.log(
         accessory.displayName,
@@ -180,6 +198,10 @@ UnifyGuestWifiPlatform.prototype.setupAccessory = function(
       callback();
     })
     .on("get", callback => {
+      if (!this.ready) {
+        callback(new Error("unifi controller is not ready yet."));
+      }
+
       const { site, wlan } = accessory.context;
       this.log(
         accessory.displayName,
