@@ -237,7 +237,7 @@ UnifyGuestWifiPlatform.prototype.addGuestWifiAccessory = async function(
     wlan
   };
 
-  this.setupAccessory(newAccessory);
+  this.setupAccessory(newAccessory, true);
 
   this.registerAccessory(newAccessory);
 };
